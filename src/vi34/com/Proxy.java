@@ -13,10 +13,11 @@ public class Proxy {
     int viewNumber;
     int n;
     int requestNumber;
-    int clientId;
+    private static int clientId;
 
     Properties config;
     Proxy () {
+        clientId++;
         config = new Properties();
         try (FileInputStream inputStream = new FileInputStream("dkvs.properties")) {
             config.load(inputStream);
@@ -34,13 +35,20 @@ public class Proxy {
                 PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
                 BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))
         ) {
-            writer.println(Request.TYPE + request);
+            writer.println(wrapRequest(request));
+            requestNumber++;
             System.out.println("Proxy sent request to " + primary);
-            return reader.readLine();
+            String response = reader.readLine();
+
+            return response;
 
         } catch (IOException e) {
             e.printStackTrace();
         }
         return null;
+    }
+
+    private String wrapRequest(String request) {
+        return Request.TYPE +","+ request + "," + clientId + "," + requestNumber;
     }
 }
