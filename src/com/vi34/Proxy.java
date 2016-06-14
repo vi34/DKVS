@@ -80,15 +80,32 @@ public class Proxy implements AutoCloseable {
 
             writer.println(new Request(op, args, clientId, requestNumber).toString());
             requestNumber++;
-            Reply reply = new Reply(reader.readLine(), null);
+            String line = reader.readLine();
+            if (line == null) {
+                throw new IOException();
+            }
+            Reply reply = new Reply(line, null);
 
             if (reply.view > viewNumber) {
                 viewNumber = reply.view;
-                // TODO: 14/06/16 clarify
             }
             return reply.response.toString();
         } catch (IOException e) {
-            e.printStackTrace();
+            System.out.println("lost connection, trying to reconnect");
+            boolean connected = false;
+            int cnt = 0;
+            while (!connected && cnt < n) {
+                cnt++;
+                viewNumber++;
+                try {
+                    if (connect(curLeader()).equals("ACCEPT")) {
+                        connected = true;
+                        return sendRequest(request);
+                    }
+                } catch (IOException e1) {
+                    System.out.println("reconnect to " + curLeader() + " failed");
+                }
+            }
         }
         return null;
     }

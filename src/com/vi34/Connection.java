@@ -18,7 +18,7 @@ public class Connection {
     WriterThread writerThread;
 
     Connection(Socket socket, Replica replica) {
-        this.socket = socket; // todo close socket
+        this.socket = socket;
         this.replica = replica;
         try {
             readerThread = new ReaderThread(socket.getInputStream());
@@ -43,6 +43,9 @@ public class Connection {
                 while (!Thread.interrupted()) {
                     String response = messageQueue.take();
                     writer.println(response);
+                    if (writer.checkError()) {
+                        // TODO: 15/06/16 reconnect
+                    }
                     writer.flush();
                 }
             } catch (InterruptedException e) {
@@ -84,6 +87,8 @@ public class Connection {
                 case Commit.TYPE: return new Commit(s, Connection.this);
                 case Reply.TYPE: return new Reply(s, Connection.this);
                 case StartViewChange.TYPE: return new StartViewChange(s, Connection.this);
+                case DoViewChange.TYPE: return new DoViewChange(s, Connection.this);
+                case StartView.TYPE: return new StartView(s, Connection.this);
                 default:
                     System.err.println("Unknown message type: " + s);
             }

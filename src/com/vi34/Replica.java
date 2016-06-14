@@ -5,9 +5,12 @@ import com.vi34.events.*;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.FileHandler;
@@ -18,26 +21,31 @@ import java.util.logging.SimpleFormatter;
  * Created by vi34 on 11/06/16.
  */
 public class Replica extends Thread {
-    int replicaNumber;
-    int port;
-    int n;
-    int timeout;
-    int viewNumber;
-    int opNumber;
-    int commitNumber;
-    Status status;
-    Logger logger;
-    Thread acceptor;
-    Connection[] connections;
-    List<Connection> externalConections = new ArrayList<>();
-    ServerSocket servSocket;
-    Properties config;
-    BlockingQueue<Event> eventQueue;
-    Map<Integer, ClientInfo> clientsTable = new HashMap<>();
-    Map<String, String> stateMachine = new HashMap<>();
-    Map<Integer, Request> pending = new HashMap<>();
-    Map<Integer, Integer> pendingOk = new HashMap<>();
-    long lastSentTimestamp;
+    private int replicaNumber;
+    private int port;
+    private int n;
+    private int timeout;
+    private int viewNumber;
+    private int opNumber;
+    private int commitNumber;
+    private int startVoteCount;
+    private int doViewChangeCount;
+    private int lastNormal;
+    private Status status;
+    private Logger logger;
+    private Thread acceptor;
+    private Connection[] connections;
+    private List<Connection> externalConections = new ArrayList<>();
+    private ServerSocket servSocket;
+    private Properties config;
+    private Map<Integer, ClientInfo> clientsTable = new HashMap<>();
+    private Map<String, String> stateMachine = new HashMap<>();
+    private Map<Integer, Request> pending = new HashMap<>();
+    private Map<Integer, Integer> pendingOk = new HashMap<>();
+    private long lastSentTimestamp;
+    private DoViewChange best;
+    private int bestCommitNum;
+    public BlockingQueue<Event> eventQueue;
 
     class ClientInfo {
         int lastRequestInd;
@@ -88,7 +96,7 @@ public class Replica extends Thread {
                             processRequest((Request) event);
                         } else {
                             //// TODO: 13/06/16 clarify this case
-                            eventQueue.offer(event);
+                            //eventQueue.offer(event);
                         }
                 } else if (event instanceof Prepare) {
                     processPrepare((Prepare) event);
@@ -96,6 +104,12 @@ public class Replica extends Thread {
                     processPrepareOK((PrepareOK) event);
                 } else if (event instanceof Commit) {
                     processCommit((Commit) event);
+                } else if (event instanceof StartViewChange) {
+                    processStartViewChange((StartViewChange) event);
+                } else if (event instanceof DoViewChange) {
+                    processDoViewChange((DoViewChange) event);
+                } else if (event instanceof StartView) {
+                    processStartView((StartView) event);
                 }
             } catch (InterruptedException e) {
                 close();
@@ -106,7 +120,7 @@ public class Replica extends Thread {
 
     private long getWaitTime() {
         if (curPrimary() == replicaNumber) {
-            long t = timeout - (System.currentTimeMillis() - lastSentTimestamp);
+            long t = timeout - (System.currentTimeMillis() - lastSentTimestamp) - 100;
             return t > 0 ? t : 0;
         } else {
             return timeout;
@@ -123,11 +137,18 @@ public class Replica extends Thread {
             }
             lastSentTimestamp = System.currentTimeMillis();
         } else {
+            startVoteCount = 0;
             startViewChange();
         }
     }
 
     private void startViewChange() {
+        if (status == Status.NORMAL) {
+            lastNormal = viewNumber;
+        }
+        doViewChangeCount = 0;
+        best = null;
+        bestCommitNum = 0;
         viewNumber++;
         status = Status.VIEW_CHANGE;
         StartViewChange msg = new StartViewChange(viewNumber, replicaNumber);
@@ -140,7 +161,61 @@ public class Replica extends Thread {
     }
 
     private void processStartViewChange(StartViewChange startViewChange) {
+        if (startViewChange.view > viewNumber) {
+            viewNumber = startViewChange.view - 1;
+            startVoteCount = 1;
+            startViewChange();
+        } else if (status == Status.VIEW_CHANGE) {
+            if (startViewChange.view == viewNumber) {
+                startVoteCount++;
+            }
+        }
 
+        if (startVoteCount >= n / 2) {
+            doViewChange();
+        }
+    }
+
+    private void processDoViewChange(DoViewChange doViewChange) {
+        doViewChangeCount++;
+        if (best == null) {
+            best = new DoViewChange(viewNumber, lastNormal, opNumber, commitNumber, replicaNumber, getLog());
+        }
+        if (doViewChange.lastNormal > best.lastNormal || doViewChange.lastNormal == best.lastNormal && doViewChange.opNum > best.opNum) {
+            best = doViewChange;
+        }
+        if (doViewChange.commitNum > bestCommitNum) {
+            bestCommitNum = doViewChange.commitNum;
+        }
+
+        if (doViewChangeCount >= n / 2) {
+            System.out.println("Replica " + (replicaNumber) + " is new leader");
+            viewNumber = doViewChange.view;
+            status = Status.NORMAL;
+            rewriteLog(best.log);
+            opNumber = best.opNum;
+            startView();
+            if (commitNumber < bestCommitNum) {
+                for (int i = commitNumber; i <= bestCommitNum; ++i) {
+                    pending.put(i, getReqFromLog(best.log.get(i)));
+                }
+                commit(commitNumber, bestCommitNum);
+            }
+        }
+    }
+
+    private void rewriteLog(List<String> log) {
+        Path logFile = Paths.get("dkvs_"+replicaNumber+".log");
+        try {
+            Files.write(logFile, log, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void startView() {
+        StartView msg = new StartView(viewNumber, opNumber, commitNumber, getLog());
+        broadcast(msg.toString());
     }
 
     private void processCommit(Commit commit) {
@@ -159,6 +234,22 @@ public class Replica extends Thread {
         }
     }
 
+    private void doViewChange() {
+        DoViewChange msg = new DoViewChange(viewNumber, lastNormal, opNumber, commitNumber, replicaNumber, getLog());
+        if (curPrimary() != replicaNumber) {
+            send(connections[curPrimary() - 1], "Replica" + curPrimary(), msg.toString());
+        }
+    }
+
+    private List<String> getLog() {
+        try {
+            return Files.readAllLines(Paths.get("dkvs_"+replicaNumber+".log"));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
     private void commit(int from, int to) {
         for (int i = from + 1; i <= to; ++i) {
             Request request = pending.get(i);
@@ -171,7 +262,7 @@ public class Replica extends Thread {
                 r = Response.DELETED;
             }
             Reply reply = new Reply(viewNumber, request.requestNumber, r.toString());
-            if (clientsTable.get(request.clientId).lastRequestInd == request.requestNumber) {
+            if (clientsTable.containsKey(request.clientId) && clientsTable.get(request.clientId).lastRequestInd == request.requestNumber) {
                 clientsTable.put(request.clientId, new ClientInfo(request.requestNumber,reply.toString()));
             }
             if (curPrimary() == replicaNumber) {
@@ -183,14 +274,33 @@ public class Replica extends Thread {
     }
 
     private void commitInform() {
-        for (int i = 0; i < connections.length; ++i) {
-            Connection connection = connections[i];
-            if (connection == null)
-                continue;
-            Commit msg = new Commit(viewNumber, commitNumber);
-            send(connection, "Replica " + (i+1), msg.toString());
+        Commit msg = new Commit(viewNumber, commitNumber);
+        broadcast(msg.toString());
+    }
+
+    private void processStartView(StartView startView) {
+        rewriteLog(startView.log);
+        opNumber = startView.opNum;
+        viewNumber = startView.view;
+        status = Status.NORMAL;
+        if (commitNumber < startView.commitNum) {
+            for (int i = commitNumber; i <= startView.commitNum; ++i) {
+                pending.put(i, getReqFromLog(startView.log.get(i)));
+            }
+            commit(commitNumber, startView.commitNum);
         }
-        lastSentTimestamp = System.currentTimeMillis();
+        if (opNumber > commitNumber) {
+            PrepareOK msg = new PrepareOK(viewNumber, opNumber, commitNumber);
+            send(connections[curPrimary() - 1], "leader", msg.toString());
+        }
+    }
+
+    private Request getReqFromLog(String logEntry) {
+        String[] tmp = logEntry.split("]:")[1].split(" ");
+        Operation op  =  Operation.valueOf(tmp[0].toUpperCase());
+        String[] args = new String[tmp.length - 1];
+        System.arraycopy(tmp, 1, tmp, 0, tmp.length - 1);
+        return new Request(op, args, -1, -1);
     }
 
     private void processRequest(Request request) {
@@ -260,10 +370,14 @@ public class Replica extends Thread {
 
     private void prepare(Request request) {
         Prepare prepareMsg = new Prepare(request, viewNumber, opNumber, commitNumber);
+        broadcast(prepareMsg.toString());
+    }
+
+    private void broadcast(String msg) {
         for (int i = 0; i < connections.length; ++i) {
             if (i == replicaNumber - 1)
                 continue;
-            send(connections[i], "Replica " + (i+1), prepareMsg.toString());
+            send(connections[i], "Replica " + (i+1), msg);
         }
         lastSentTimestamp = System.currentTimeMillis();
     }

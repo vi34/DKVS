@@ -24,7 +24,7 @@ public class Server {
         while (true) {
             System.out.println("> ");
             switch (scanner.next()) {
-                case "dkvs_node":
+                case "start":
                     startNode(scanner.nextInt());
                     break;
                 case "stop":
