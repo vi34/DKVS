@@ -1,6 +1,6 @@
-package vi34.com.events;
+package com.vi34.events;
 
-import vi34.com.Connection;
+import com.vi34.Connection;
 
 /**
  * Created by vi34 on 12/06/16.
@@ -20,6 +20,11 @@ public class Commit implements Event {
         commitNum = Integer.valueOf(tmp[2]);
     }
 
+    public Commit(int view, int commitNum) {
+        this.view = view;
+        this.commitNum = commitNum;
+    }
+
     @Override
     public Connection getConnection() {
         return connection;
@@ -27,7 +32,7 @@ public class Commit implements Event {
 
     @Override
     public String toString() {
-        return s;
+        return  Commit.TYPE + "," + view + "," + commitNum;
     }
 
     @Override

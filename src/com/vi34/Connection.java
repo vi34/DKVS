@@ -1,11 +1,10 @@
-package vi34.com;
+package com.vi34;
 
-import vi34.com.events.*;
+import com.vi34.events.*;
 
 import java.io.*;
 import java.net.Socket;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /**
@@ -22,8 +21,10 @@ public class Connection {
         this.socket = socket; // todo close socket
         this.replica = replica;
         try {
-            new ReaderThread(socket.getInputStream()).start();
-            new WriterThread(socket.getOutputStream()).start();
+            readerThread = new ReaderThread(socket.getInputStream());
+            writerThread = new WriterThread(socket.getOutputStream());
+            writerThread.start();
+            readerThread.start();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -45,7 +46,6 @@ public class Connection {
                     writer.flush();
                 }
             } catch (InterruptedException e) {
-                e.printStackTrace();
             }
         }
     }
@@ -65,7 +65,6 @@ public class Connection {
                     replica.eventQueue.add(event);
                 }
             } catch (IOException e) {
-                e.printStackTrace();
             } finally {
                 try {
                     socket.close();
@@ -83,6 +82,8 @@ public class Connection {
                 case Prepare.TYPE: return new Prepare(s, Connection.this);
                 case PrepareOK.TYPE: return new PrepareOK(s, Connection.this);
                 case Commit.TYPE: return new Commit(s, Connection.this);
+                case Reply.TYPE: return new Reply(s, Connection.this);
+                case StartViewChange.TYPE: return new StartViewChange(s, Connection.this);
                 default:
                     System.err.println("Unknown message type: " + s);
             }

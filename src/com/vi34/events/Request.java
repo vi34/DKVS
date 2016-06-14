@@ -1,7 +1,7 @@
-package vi34.com.events;
+package com.vi34.events;
 
-import vi34.com.Connection;
-import vi34.com.Operation;
+import com.vi34.Connection;
+import com.vi34.Operation;
 
 /**
  * Created by vi34 on 12/06/16.
@@ -12,15 +12,11 @@ public class Request implements Event {
     public String[] args;
     public int clientId;
     public int requestNumber;
-    private String s;
     private Connection connection;
 
-    public Request() {
-    }
 
     public Request(String s, Connection connection) {
         this.connection = connection;
-        this.s = s;
         String[] tmp = s.split(",");
         String[] req = tmp[1].split(" ");
         op =  Operation.valueOf(req[0].toUpperCase());
@@ -31,6 +27,13 @@ public class Request implements Event {
 
     }
 
+    public Request(Operation op, String[] args, int clientId, int requestNumber) {
+        this.op = op;
+        this.args = args;
+        this.clientId = clientId;
+        this.requestNumber = requestNumber;
+    }
+
     @Override
     public Connection getConnection() {
         return connection;
@@ -38,7 +41,7 @@ public class Request implements Event {
 
     @Override
     public String toString() {
-        return s;
+        return Request.TYPE +","+ op + " " + String.join(" ", args) + "," + clientId + "," + requestNumber;
     }
 
     @Override

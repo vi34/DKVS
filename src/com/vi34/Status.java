@@ -1,4 +1,4 @@
-package vi34.com;
+package com.vi34;
 
 /**
  * Created by vi34 on 11/06/16.

@@ -1,7 +1,6 @@
-package vi34.com.events;
+package com.vi34.events;
 
-import vi34.com.Connection;
-import vi34.com.Operation;
+import com.vi34.Connection;
 
 /**
  * Created by vi34 on 12/06/16.
@@ -23,6 +22,12 @@ public class PrepareOK implements Event {
         replicaNum = Integer.valueOf(tmp[3]);
     }
 
+    public PrepareOK(int view, int opNum, int replicaNum) {
+        this.view = view;
+        this.opNum = opNum;
+        this.replicaNum = replicaNum;
+    }
+
     @Override
     public Connection getConnection() {
         return connection;
@@ -30,7 +35,7 @@ public class PrepareOK implements Event {
 
     @Override
     public String toString() {
-        return s;
+        return PrepareOK.TYPE + "," + view + "," + opNum + "," + replicaNum;
     }
 
     @Override

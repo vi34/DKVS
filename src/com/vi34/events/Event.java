@@ -1,6 +1,6 @@
-package vi34.com.events;
+package com.vi34.events;
 
-import vi34.com.Connection;
+import com.vi34.Connection;
 
 /**
  * Created by vi34 on 12/06/16.
