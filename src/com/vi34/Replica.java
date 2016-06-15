@@ -3,6 +3,7 @@ package com.vi34;
 import com.vi34.events.*;
 
 import java.io.*;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
@@ -21,16 +22,18 @@ import java.util.logging.SimpleFormatter;
  * Created by vi34 on 11/06/16.
  */
 public class Replica extends Thread {
-    private int replicaNumber;
+    public int replicaNumber;
     private int port;
     private int n;
-    private int timeout;
+    public int timeout;
     private int viewNumber;
     private int opNumber;
     private int commitNumber;
     private int startVoteCount;
     private int doViewChangeCount;
     private int lastNormal;
+    private long nonce;
+    private int recoveryCount;
     private Status status;
     private Logger logger;
     private Thread acceptor;
@@ -44,8 +47,10 @@ public class Replica extends Thread {
     private Map<Integer, Integer> pendingOk = new HashMap<>();
     private long lastSentTimestamp;
     private DoViewChange best;
+    private RecoveryResponse leadRecovery;
     private int bestCommitNum;
     public BlockingQueue<Event> eventQueue;
+    private String logPath;
 
     class ClientInfo {
         int lastRequestInd;
@@ -61,10 +66,16 @@ public class Replica extends Thread {
         System.setProperty("java.util.logging.SimpleFormatter.format", "[%1$tH:%1$tM:%1$tS]: %5$s %n");
         replicaNumber = idx;
         config = new Properties();
+        logPath = "dkvs_"+replicaNumber+".log";
         try (FileInputStream inputStream = new FileInputStream("dkvs.properties")) {
             config.load(inputStream);
+            if (Files.exists(Paths.get(logPath))) {
+                status = Status.RECOVERING;
+            } else {
+                status = Status.NORMAL;
+            }
             logger = Logger.getLogger("Replica_" + replicaNumber);
-            FileHandler fh = new FileHandler("dkvs_"+replicaNumber+".log");
+            FileHandler fh = new FileHandler(logPath, false);
             logger.addHandler(fh);
             SimpleFormatter formatter = new SimpleFormatter();
             fh.setFormatter(formatter);
@@ -76,12 +87,14 @@ public class Replica extends Thread {
         timeout = Integer.valueOf(config.getProperty("timeout"));
         port = Integer.valueOf(config.getProperty("node." + replicaNumber).split(":")[1]);
         eventQueue = new LinkedBlockingQueue<>();
-        status = Status.NORMAL;
     }
 
     @Override
     public void run() {
         startCommThreads();
+        if (status == Status.RECOVERING){
+            startRecovery();
+        }
         while (!Thread.interrupted()) {
             try {
                 Event event = eventQueue.poll(getWaitTime(), TimeUnit.MILLISECONDS);
@@ -91,13 +104,17 @@ public class Replica extends Thread {
                 }
 
                 System.out.println("Replica "+ replicaNumber + " got: <" + event + ">");
-                if (event instanceof Request) {
-                        if (status == Status.NORMAL) {
-                            processRequest((Request) event);
-                        } else {
-                            //// TODO: 13/06/16 clarify this case
-                            //eventQueue.offer(event);
-                        }
+                if (status == Status.RECOVERING) {
+                    if (event instanceof RecoveryResponse) {
+                        processRecoveryResponse((RecoveryResponse) event);
+                    }
+                } else if (event instanceof Recovery) {
+                    if (status == Status.VIEW_CHANGE)
+                        eventQueue.offer(event);
+                    else
+                        processRecovery((Recovery) event);
+                } else if (event instanceof Request) {
+                    processRequest((Request) event);
                 } else if (event instanceof Prepare) {
                     processPrepare((Prepare) event);
                 } else if (event instanceof PrepareOK) {
@@ -110,16 +127,46 @@ public class Replica extends Thread {
                     processDoViewChange((DoViewChange) event);
                 } else if (event instanceof StartView) {
                     processStartView((StartView) event);
+                } else if (event instanceof Reply) {
+                    processReply((Reply) event);
                 }
             } catch (InterruptedException e) {
                 close();
                 return;
             }
         }
+        close();
+    }
+
+    private void processRecoveryResponse(RecoveryResponse recoveryResponse) {
+        if (recoveryResponse.nonce == nonce) {
+            recoveryCount++;
+            if (recoveryResponse.view % n + 1 == recoveryResponse.replicaNum || leadRecovery == null) {
+                leadRecovery = recoveryResponse;
+            }
+        }
+        if (recoveryCount >= n / 2) {
+            viewNumber = leadRecovery.view;
+            rewriteLog(leadRecovery.log);
+            opNumber = leadRecovery.opNum;
+            if (commitNumber < leadRecovery.commitNum) {
+                for (int i = commitNumber + 1; i <= leadRecovery.commitNum; ++i) {
+                    pending.put(i, getReqFromLog(leadRecovery.log.get(i - 1)));
+                }
+                commit(commitNumber, leadRecovery.commitNum);
+            }
+            status = Status.NORMAL;
+        }
+    }
+
+    private void processRecovery(Recovery recovery) {
+        RecoveryResponse response = new RecoveryResponse(viewNumber, recovery.nonce, opNumber,
+                                                        commitNumber, replicaNumber, getLog());
+        send(recovery.getConnection(), "Replica " + recovery.replicaNum, response.toString());
     }
 
     private long getWaitTime() {
-        if (curPrimary() == replicaNumber) {
+        if (curPrimary() == replicaNumber && status == Status.NORMAL) {
             long t = timeout - (System.currentTimeMillis() - lastSentTimestamp) - 100;
             return t > 0 ? t : 0;
         } else {
@@ -129,7 +176,7 @@ public class Replica extends Thread {
 
     private void timeExpired() {
         if (curPrimary() == replicaNumber) {
-            Request msg = new Request(Operation.PING, new String[0], replicaNumber, commitNumber); // FIXME: send commit
+            Request msg = new Request(Operation.PING, new String[0], replicaNumber, commitNumber);
             for (int i = 0; i < connections.length; ++i) {
                 if (i == replicaNumber - 1)
                     continue;
@@ -140,6 +187,13 @@ public class Replica extends Thread {
             startVoteCount = 0;
             startViewChange();
         }
+    }
+
+    private void startRecovery() {
+        nonce = System.currentTimeMillis();
+        recoveryCount = 0;
+        Recovery msg = new Recovery(replicaNumber, nonce);
+        broadcast(msg.toString());
     }
 
     private void startViewChange() {
@@ -158,6 +212,12 @@ public class Replica extends Thread {
             send(connections[i], "Replica " + (i+1), msg.toString());
         }
         lastSentTimestamp = System.currentTimeMillis();
+    }
+
+    private void processReply(Reply reply) {
+        if (reply.view > viewNumber) {
+            //status = Status.RECOVERING;
+        }
     }
 
     private void processStartViewChange(StartViewChange startViewChange) {
@@ -196,8 +256,8 @@ public class Replica extends Thread {
             opNumber = best.opNum;
             startView();
             if (commitNumber < bestCommitNum) {
-                for (int i = commitNumber; i <= bestCommitNum; ++i) {
-                    pending.put(i, getReqFromLog(best.log.get(i)));
+                for (int i = commitNumber + 1; i <= bestCommitNum; ++i) {
+                    pending.put(i, getReqFromLog(best.log.get(i - 1)));
                 }
                 commit(commitNumber, bestCommitNum);
             }
@@ -205,7 +265,7 @@ public class Replica extends Thread {
     }
 
     private void rewriteLog(List<String> log) {
-        Path logFile = Paths.get("dkvs_"+replicaNumber+".log");
+        Path logFile = Paths.get(logPath);
         try {
             Files.write(logFile, log, StandardOpenOption.WRITE);
         } catch (IOException e) {
@@ -219,7 +279,11 @@ public class Replica extends Thread {
     }
 
     private void processCommit(Commit commit) {
-        // TODO: 14/06/16 check viewNum
+        /*if (commit.view > viewNumber) {
+          status = Status.RECOVERING;
+        } else {
+            commit(commitNumber, commit.commitNum);
+        }*/
         commit(commitNumber, commit.commitNum);
     }
 
@@ -243,7 +307,7 @@ public class Replica extends Thread {
 
     private List<String> getLog() {
         try {
-            return Files.readAllLines(Paths.get("dkvs_"+replicaNumber+".log"));
+            return Files.readAllLines(Paths.get(logPath));
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -265,7 +329,7 @@ public class Replica extends Thread {
             if (clientsTable.containsKey(request.clientId) && clientsTable.get(request.clientId).lastRequestInd == request.requestNumber) {
                 clientsTable.put(request.clientId, new ClientInfo(request.requestNumber,reply.toString()));
             }
-            if (curPrimary() == replicaNumber) {
+            if (curPrimary() == replicaNumber && request.getConnection() != null) {
                 send(request.getConnection(), "Client ", reply.toString());
             }
             pending.remove(i);
@@ -284,8 +348,8 @@ public class Replica extends Thread {
         viewNumber = startView.view;
         status = Status.NORMAL;
         if (commitNumber < startView.commitNum) {
-            for (int i = commitNumber; i <= startView.commitNum; ++i) {
-                pending.put(i, getReqFromLog(startView.log.get(i)));
+            for (int i = commitNumber + 1; i <= startView.commitNum; ++i) {
+                pending.put(i, getReqFromLog(startView.log.get(i - 1)));
             }
             commit(commitNumber, startView.commitNum);
         }
@@ -296,7 +360,7 @@ public class Replica extends Thread {
     }
 
     private Request getReqFromLog(String logEntry) {
-        String[] tmp = logEntry.split("]:")[1].split(" ");
+        String[] tmp = logEntry.split("]: ")[1].split(" ");
         Operation op  =  Operation.valueOf(tmp[0].toUpperCase());
         String[] args = new String[tmp.length - 1];
         System.arraycopy(tmp, 1, tmp, 0, tmp.length - 1);
@@ -322,7 +386,7 @@ public class Replica extends Thread {
         } else if (request.op == Operation.PING) {
             Reply reply = new Reply(viewNumber, request.requestNumber, Response.PONG.toString());
             send(request.getConnection(), ""+request.clientId, reply.toString());
-        } else {
+        } else if (status != Status.VIEW_CHANGE){
             if (curPrimary() != replicaNumber) {
                 System.out.println("WARNING: Not leader got request\nprimary: " + curPrimary() + " replica: " + replicaNumber);
             } else {
@@ -347,7 +411,7 @@ public class Replica extends Thread {
     }
 
     private void processPrepare(Prepare prepare) {
-        if (prepare.opNum > opNumber) {
+        if (prepare.opNum > opNumber + 1) {
             // todo: state transfer
             opNumber = prepare.opNum - 1;
         }
@@ -388,27 +452,36 @@ public class Replica extends Thread {
 
     private void startCommThreads() {
         acceptor  = new Thread(() -> {
-            try (ServerSocket serverSocket = new ServerSocket(port)){
+            try {
+                ServerSocket serverSocket = new ServerSocket();
+                serverSocket.setReuseAddress(true);
+                serverSocket.bind(new InetSocketAddress(port));
                 servSocket = serverSocket;
                 while (!Thread.interrupted()) {
                     Connection conn = new Connection(serverSocket.accept(), this);
                     conn.messageQueue.offer(new Reply(viewNumber, -1, "ACCEPT").toString());
                     externalConections.add(conn);
                 }
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+            } finally {
+                try {
+                    if(servSocket != null) {
+                        servSocket.close();
+                    }
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         });
         acceptor.start();
         connections = new Connection[n];
-
+        //todo if other
         for (int i = 0; i < n; ++i) {
             if (i == replicaNumber - 1)
                 continue;
             String[] address = config.getProperty("node." + (i + 1)).split(":");
-            try {
-                connections[i] = new Connection(new Socket(address[0], Integer.valueOf(address[1])), this);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            connections[i] = new Connection(address[0], Integer.valueOf(address[1]), this);
         }
     }
 

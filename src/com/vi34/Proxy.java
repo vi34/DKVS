@@ -15,6 +15,7 @@ public class Proxy implements AutoCloseable {
     int viewNumber;
     int n;
     int requestNumber;
+    int timeout;
     private static int clientId;
 
     Socket socket;
@@ -30,21 +31,16 @@ public class Proxy implements AutoCloseable {
         } catch (IOException e) {
             e.printStackTrace();
         }
+        timeout = Integer.valueOf(config.getProperty("timeout"));
         n = Integer.valueOf(config.getProperty("n"));
-        socket = new Socket();
-        try {
-            connect(curLeader());
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
     }
 
     public String directConnect(String to) {
         try {
             if (to.equals("lead")) {
-                return connect(curLeader());
+                return connect(curLeader()).response;
             } else {
-                return connect(Integer.valueOf(to));
+                return connect(Integer.valueOf(to)).response;
             }
         } catch (IOException e) {
             e.printStackTrace();
@@ -52,19 +48,21 @@ public class Proxy implements AutoCloseable {
         return null;
     }
 
-    private String connect(int to) throws IOException {
+    private Reply connect(int to) throws IOException {
         String[] address = config.getProperty("node." + to).split(":");
         if (writer != null) {
             writer.close();
             reader.close();
         }
-        if (socket.isClosed()) {
+        if (socket == null || socket.isClosed()) {
             socket = new Socket();
+            socket.setSoTimeout(timeout);
         }
+
         socket.connect(new InetSocketAddress(address[0],Integer.valueOf(address[1])));
         writer = new PrintWriter(socket.getOutputStream(), true);
         reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        return new Reply(reader.readLine(), null).response;
+        return new Reply(reader.readLine(), null);
     }
 
     private int curLeader() {
@@ -80,7 +78,7 @@ public class Proxy implements AutoCloseable {
 
             writer.println(new Request(op, args, clientId, requestNumber).toString());
             requestNumber++;
-            String line = reader.readLine();
+            String line = reader.readLine(); // todo timeout
             if (line == null) {
                 throw new IOException();
             }
@@ -92,18 +90,24 @@ public class Proxy implements AutoCloseable {
             return reply.response.toString();
         } catch (IOException e) {
             System.out.println("lost connection, trying to reconnect");
-            boolean connected = false;
             int cnt = 0;
-            while (!connected && cnt < n) {
+            while (cnt < n) {
                 cnt++;
                 viewNumber++;
                 try {
-                    if (connect(curLeader()).equals("ACCEPT")) {
-                        connected = true;
+                    Thread.sleep(timeout); // wait for view_change complete
+                    Reply reply = connect(curLeader());
+                    if (reply.response.equals("ACCEPT")) {
+                        if (reply.view != viewNumber) {
+                            viewNumber = reply.view;
+                            connect(curLeader());
+                        }
                         return sendRequest(request);
                     }
                 } catch (IOException e1) {
                     System.out.println("reconnect to " + curLeader() + " failed");
+                } catch (InterruptedException e1) {
+                    return null;
                 }
             }
         }

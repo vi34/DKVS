@@ -1,5 +1,9 @@
 package com.vi34;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Scanner;
 
 /**
@@ -7,9 +11,9 @@ import java.util.Scanner;
  */
 public class Server {
     static int n = 3;
-    static Thread[] replicas;
+    static Thread[] replicas = new Thread[n];
     public static void main(String[] args) {
-        replicas = new Thread[n];
+        cleanLogs();
         if (args.length == 0) {
             for (int i = 0; i < n; ++i) {
                 startNode(i + 1);
@@ -28,10 +32,12 @@ public class Server {
                     startNode(scanner.nextInt());
                     break;
                 case "stop":
-                    stopNode(scanner.nextInt() - 1);
+                    stopNode(scanner.nextInt());
                     break;
                 case "exit":
                     scanner.close();
+                    for (int i = 0; i < n; ++i)
+                        stopNode(i + 1);
                     return;
 
                 default:
@@ -40,17 +46,23 @@ public class Server {
         }
     }
 
-    private static void startNode(int i) {
+    public static void cleanLogs() {
+        for (int i = 0; i < n; ++i) {
+            new File("dkvs_"+ (i+1)+".log").delete();
+        }
+    }
+
+    public static void startNode(int i) {
         if (replicas[i - 1] == null) {
             replicas[i - 1] = new Thread(new Replica(i));
             replicas[i - 1].start();
         }
     }
 
-    private static void stopNode(int i) {
-        if (replicas[i] != null) {
-            replicas[i].interrupt();
-            replicas[i] = null;
+    public static void stopNode(int i) {
+        if (replicas[i - 1] != null) {
+            replicas[i - 1].interrupt();
+            replicas[i - 1] = null;
         }
     }
 }
