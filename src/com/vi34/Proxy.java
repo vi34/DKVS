@@ -78,7 +78,7 @@ public class Proxy implements AutoCloseable {
 
             writer.println(new Request(op, args, clientId, requestNumber).toString());
             requestNumber++;
-            String line = reader.readLine(); // todo timeout
+            String line = reader.readLine();
             if (line == null) {
                 throw new IOException();
             }
@@ -116,8 +116,10 @@ public class Proxy implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        reader.close();
-        writer.close();
+        if (writer != null) {
+            writer.close();
+            reader.close();
+        }
         socket.close();
     }
 }

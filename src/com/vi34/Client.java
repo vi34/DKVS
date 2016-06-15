@@ -55,29 +55,53 @@ public class Client {
         try {
            Thread.sleep(100);
             proxy.directConnect("lead");
-             /*
             makeReq("get x");
             makeReq("ping");
             makeReq("set x 10");
             makeReq("get x");
             makeReq("set y 20");
+            System.out.println("==== stop 1 ====");
             Server.stopNode(1);
-            Thread.sleep(2000);
+            Thread.sleep(3000);
             makeReq("set z 50");
-            Thread.sleep(1000);
+            Thread.sleep(2000);
+            System.out.println("==== start 1 ====");
             Server.startNode(1);
             makeReq("delete x");
+            Thread.sleep(4000);
             makeReq("get x");
             makeReq("get y");
             makeReq("get z");
-            Thread.sleep(7000);*/
+            makeReq("set a 1");
+            makeReq("set b 2");
+            makeReq("set c 3");
+            System.out.println("==== stop 2 ====");
+            Server.stopNode(2);
             Thread.sleep(3000);
-            Server.stopNode(1);
-            System.out.println("stop 1");
-            Thread.sleep(8000);
-            Server.startNode(1);
-            System.out.println("start 1");
-            Thread.sleep(10000);
+            makeReq("set 2down 50");
+            Thread.sleep(2000);
+            System.out.println("==== start 2 ====");
+            Server.startNode(2);
+            Thread.sleep(2000);
+            makeReq("set d 4");
+            makeReq("set e 5");
+            Thread.sleep(6000);
+            System.out.println("==== stop 3 ====");
+            Server.stopNode(3);
+            Thread.sleep(3000);
+            makeReq("set 3down 50");
+            Thread.sleep(2000);
+            System.out.println("==== start 3 ====");
+            Server.startNode(3);
+            Thread.sleep(4000);
+            makeReq("get a");
+            makeReq("get b");
+            makeReq("get c");
+            makeReq("get d");
+            makeReq("get e");
+            makeReq("get 2down");
+            makeReq("get 3down");
+            Thread.sleep(4000);
         } catch (InterruptedException e) {
             e.printStackTrace();
         } finally {

@@ -16,13 +16,12 @@ import java.util.concurrent.locks.ReentrantLock;
  * Created by vi34 on 12/06/16.
  */
 public class Connection {
-    Socket socket;
+    volatile Socket socket;
     Replica replica;
     public BlockingQueue<String> messageQueue = new LinkedBlockingQueue<>();
     private final ReaderThread readerThread = new ReaderThread();
     private final WriterThread writerThread = new WriterThread();
     InetSocketAddress socketAddress;
-    volatile boolean connected = false;
 
     Connection(Socket socket, Replica replica) {
         this.socket = socket;
@@ -51,70 +50,46 @@ public class Connection {
         readerThread.start();
     }
 
+    private synchronized void reconnect() throws InterruptedException {
+        while (socket.isClosed() || !socket.isConnected()) {
+            if (Thread.interrupted()) {
+                throw new InterruptedException();
+            }
+            //System.out.println("R"+replica.replicaNumber + "try to recconnect to " + socketAddress.getPort());
+            socket = new Socket();
+            try {
+                Thread.sleep(1000);
+                socket.connect(socketAddress);
+            } catch (IOException e) {
+            }
+        }
+    }
+
     private class WriterThread extends Thread {
         OutputStream os;
-        boolean close = false;
 
         @Override
         public void run() {
             try {
-                if (os == null) {
-                    reconnect();
+                outer: while (!Thread.interrupted()) {
+                    try (PrintWriter writer = new PrintWriter(socket.getOutputStream())) {
+                        while (true) {
+                            String response = messageQueue.take();
+                            writer.println(response);
+                            if (writer.checkError() || socket.isClosed()) {
+                                reconnect();
+                                continue outer;
+                            }
+                            writer.flush();
+                        }
+                    } catch (IOException e) {
+                        reconnect();
+                    }
                 }
             } catch (InterruptedException e) {
                 return;
             }
-                outer: while (!Thread.interrupted()) {
-                    try (PrintWriter writer = new PrintWriter(os)) {
-                        while (connected) {
-                            try {
-                                String response = messageQueue.take();
-                                writer.println(response);
-                                if (writer.checkError() || !connected) {
-                                    reconnect();
-                                    continue outer;
-                                }
-                                writer.flush();
-                            } catch (InterruptedException e) {
-                                if (close) {
-                                    return;
-                                } else {
-                                    try {
-                                        reconnect();
-                                    } catch (InterruptedException e1) {
-                                        return;
-                                    }
-                                    continue outer;
-                                }
-                            }
-                        }
-                    }
-                }
-            System.out.println("Writer " +replica.replicaNumber + " p: " + socketAddress.getPort() + "stopped" );
-        }
-
-        private void reconnect() throws InterruptedException {
-            while (!socket.isConnected()) {
-                System.out.println("R"+replica.replicaNumber + "try to recconnect to " + socketAddress.getPort());
-                if (Thread.interrupted()) {
-                    throw new InterruptedException();
-                }
-                if (socket.isClosed()) {
-                    socket = new Socket();
-                }
-                try {
-                    Thread.sleep(1000);
-                    socket.connect(socketAddress);
-                    os = socket.getOutputStream();
-                    synchronized (readerThread) {
-                        readerThread.is = socket.getInputStream();
-                        connected = true;
-                        readerThread.notify();
-                    }
-                } catch (IOException e) {
-
-                }
-            }
+            //System.out.println("Writer " +replica.replicaNumber + " p: " + socketAddress.getPort() + "stopped" );
         }
     }
 
@@ -124,17 +99,13 @@ public class Connection {
         @Override
         public void run() {
             try {
-                if (is == null) {
-                    reconnect();
-                }
                 outer: while (!Thread.interrupted()) {
-                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(is))) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
                         String line;
                         while(true) {
                             if ((line = reader.readLine()) == null) {
                                 if (Thread.interrupted())
                                     return;
-                                connected = false;
                                 reconnect();
                                 continue outer;
                             }
@@ -145,24 +116,8 @@ public class Connection {
                         reconnect();
                     }
                 }
-            } catch (InterruptedException e) {
-            }  finally {
-                try {
-                    socket.close();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                System.out.println("REader " +replica.replicaNumber + " p: " + socketAddress.getPort() + "stopped" );
-            }
-        }
-
-        private synchronized void reconnect() throws InterruptedException {
-            System.out.println("REader " +replica.replicaNumber + " p: " + socketAddress.getPort() + "waiting" );
-            writerThread.interrupt();
-            while(!connected) {
-                wait();
-            }
-            System.out.println("REader " +replica.replicaNumber + " p: " + socketAddress.getPort() + "UNwaiting" );
+            } catch (InterruptedException e) {}
+            //System.out.println("REader " +replica.replicaNumber + " p: " + socketAddress.getPort() + "stopped" );
         }
 
         private Event buildEvent(String s) {
@@ -187,7 +142,6 @@ public class Connection {
     }
 
     public void close() {
-        writerThread.close = true;
         writerThread.interrupt();
         readerThread.interrupt();
         try {

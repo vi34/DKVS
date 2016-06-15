@@ -48,7 +48,10 @@ public class Server {
 
     public static void cleanLogs() {
         for (int i = 0; i < n; ++i) {
-            new File("dkvs_"+ (i+1)+".log").delete();
+            File dir = new File("logs");
+            for (File log : dir.listFiles()) {
+                log.delete();
+            }
         }
     }
 
