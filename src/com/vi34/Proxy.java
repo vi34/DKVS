@@ -7,6 +7,7 @@ import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.Properties;
+import java.util.Random;
 
 /**
  * Created by vi34 on 11/06/16.
@@ -24,7 +25,7 @@ public class Proxy implements AutoCloseable {
 
     Properties config;
     Proxy () {
-        clientId++;
+        clientId = (int) System.currentTimeMillis();
         config = new Properties();
         try (FileInputStream inputStream = new FileInputStream("dkvs.properties")) {
             config.load(inputStream);
@@ -36,15 +37,21 @@ public class Proxy implements AutoCloseable {
     }
 
     public String directConnect(String to) {
-        try {
             if (to.equals("lead")) {
+                try {
                 return connect(curLeader()).response;
+                } catch (IOException e) {
+                    reconnect();
+                }
             } else {
-                return connect(Integer.valueOf(to)).response;
+                try {
+                    return connect(Integer.valueOf(to)).response;
+                } catch (IOException e) {
+                    //System.out.println("unable to connect to " + to);
+                    e.printStackTrace();
+                }
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+
         return null;
     }
 
@@ -54,10 +61,11 @@ public class Proxy implements AutoCloseable {
             writer.close();
             reader.close();
         }
-        if (socket == null || socket.isClosed()) {
-            socket = new Socket();
-            socket.setSoTimeout(timeout);
+        if (socket != null) {
+            socket.close();
         }
+        socket = new Socket();
+        socket.setSoTimeout(timeout);
 
         socket.connect(new InetSocketAddress(address[0],Integer.valueOf(address[1])));
         writer = new PrintWriter(socket.getOutputStream(), true);
@@ -86,32 +94,37 @@ public class Proxy implements AutoCloseable {
 
             if (reply.view > viewNumber) {
                 viewNumber = reply.view;
+                reconnect();
             }
-            return reply.response.toString();
+            return reply.response;
         } catch (IOException e) {
-            System.out.println("lost connection, trying to reconnect");
-            int cnt = 0;
-            while (cnt < n) {
-                cnt++;
-                viewNumber++;
-                try {
-                    Thread.sleep(timeout); // wait for view_change complete
-                    Reply reply = connect(curLeader());
-                    if (reply.response.equals("ACCEPT")) {
-                        if (reply.view != viewNumber) {
-                            viewNumber = reply.view;
-                            connect(curLeader());
-                        }
-                        return sendRequest(request);
+            reconnect();
+            return sendRequest(request);
+        }
+    }
+
+    private void reconnect() {
+        System.out.println("lost connection, trying to reconnect");
+        int cnt = 0;
+        while (cnt < n) {
+            cnt++;
+            viewNumber++;
+            try {
+                Thread.sleep(timeout); // wait for view_change complete
+                Reply reply = connect(curLeader());
+                if (reply.response.equals("ACCEPT")) {
+                    if (reply.view != viewNumber) {
+                        viewNumber = reply.view;
+                        connect(curLeader());
                     }
-                } catch (IOException e1) {
-                    System.out.println("reconnect to " + curLeader() + " failed");
-                } catch (InterruptedException e1) {
-                    return null;
+
                 }
+            } catch (IOException e1) {
+                System.out.println("reconnect to " + curLeader() + " failed");
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
         }
-        return null;
     }
 
     @Override

@@ -100,9 +100,6 @@ public class Replica extends Thread {
                         processRecoveryResponse((RecoveryResponse) event);
                     }
                 } else if (event instanceof Recovery) {
-                    if (status == Status.VIEW_CHANGE)
-                        eventQueue.offer(event);
-                    else
                         processRecovery((Recovery) event);
                 } else if (event instanceof Request) {
                     processRequest((Request) event);
@@ -321,7 +318,7 @@ public class Replica extends Thread {
                 clientsTable.put(request.clientId, new ClientInfo(request.requestNumber,reply.toString()));
             }
             if (curPrimary() == replicaNumber && request.getConnection() != null) {
-                send(request.getConnection(), "Client ", reply.toString());
+                send(request.getConnection(), " ", reply.toString());
             }
             pending.remove(i);
         }
@@ -354,7 +351,7 @@ public class Replica extends Thread {
         String[] tmp = logEntry.split(" ");
         Operation op  =  Operation.valueOf(tmp[0].toUpperCase());
         String[] args = new String[tmp.length - 1];
-        System.arraycopy(tmp, 1, tmp, 0, tmp.length - 1);
+        System.arraycopy(tmp, 1, args, 0, tmp.length - 1);
         return new Request(op, args, -1, -1);
     }
 
@@ -362,7 +359,7 @@ public class Replica extends Thread {
         if (clientsTable.containsKey(request.clientId)) {
             ClientInfo info = clientsTable.get(request.clientId);
             if (info.lastRequestInd == request.requestNumber && info.response != null) {
-                send(request.getConnection(), "Client " + request.clientId, info.response);
+                send(request.getConnection(), " " + request.clientId, info.response);
                 return;
             } else if (info.lastRequestInd > request.requestNumber) {
                 //drop
@@ -373,7 +370,7 @@ public class Replica extends Thread {
         if (request.op == Operation.GET) {
             String response = evaluate(request.args[0]);
             Reply reply = new Reply(viewNumber, request.requestNumber, response);
-            send(request.getConnection(), "Client " + request.clientId, reply.toString());
+            send(request.getConnection(), " " + request.clientId, reply.toString());
         } else if (request.op == Operation.PING) {
             Reply reply = new Reply(viewNumber, request.requestNumber, Response.PONG.toString());
             send(request.getConnection(), ""+request.clientId, reply.toString());
@@ -403,7 +400,6 @@ public class Replica extends Thread {
 
     private void processPrepare(Prepare prepare) {
         if (prepare.opNum > opNumber + 1) {
-            // todo: state transfer
             opNumber = prepare.opNum - 1;
         }
         opNumber++;

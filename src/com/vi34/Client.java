@@ -30,9 +30,18 @@ public class Client {
             System.out.print("> ");
             String cmd = scanner.nextLine();
             if (cmd.startsWith("get") || cmd.startsWith("set") || cmd.startsWith("ping") || cmd.startsWith("delete") ) {
-                System.out.println(proxy.sendRequest(cmd));
+                if (correctReq(cmd)) {
+                    System.out.println(proxy.sendRequest(cmd));
+                } else {
+                    System.out.println("wrong command: " + cmd);
+                }
             } else if (cmd.startsWith("node")) {
-                System.out.println(proxy.directConnect(cmd.split(" ")[1]));
+                String[] tmp = cmd.split(" ");
+                if (tmp.length != 2) {
+                    System.out.println("wrong command: " + cmd);
+                } else {
+                    System.out.println(proxy.directConnect(cmd.split(" ")[1]));
+                }
             } else if (cmd.startsWith("exit")) {
                 return;
             } else {
@@ -67,40 +76,9 @@ public class Client {
             Thread.sleep(2000);
             System.out.println("==== start 1 ====");
             Server.startNode(1);
-            makeReq("delete x");
-            Thread.sleep(4000);
             makeReq("get x");
             makeReq("get y");
             makeReq("get z");
-            makeReq("set a 1");
-            makeReq("set b 2");
-            makeReq("set c 3");
-            System.out.println("==== stop 2 ====");
-            Server.stopNode(2);
-            Thread.sleep(3000);
-            makeReq("set 2down 50");
-            Thread.sleep(2000);
-            System.out.println("==== start 2 ====");
-            Server.startNode(2);
-            Thread.sleep(2000);
-            makeReq("set d 4");
-            makeReq("set e 5");
-            Thread.sleep(6000);
-            System.out.println("==== stop 3 ====");
-            Server.stopNode(3);
-            Thread.sleep(3000);
-            makeReq("set 3down 50");
-            Thread.sleep(2000);
-            System.out.println("==== start 3 ====");
-            Server.startNode(3);
-            Thread.sleep(4000);
-            makeReq("get a");
-            makeReq("get b");
-            makeReq("get c");
-            makeReq("get d");
-            makeReq("get e");
-            makeReq("get 2down");
-            makeReq("get 3down");
             Thread.sleep(4000);
         } catch (InterruptedException e) {
             e.printStackTrace();
@@ -108,6 +86,22 @@ public class Client {
             for (int i = 0; i < n; ++i) {
                 Server.stopNode(i + 1);
             }
+        }
+    }
+
+    private static boolean correctReq(String s) {
+        String[] parts = s.split(" ");
+        switch (parts[0]) {
+            case "get":
+                return parts.length == 2;
+            case "set":
+                return parts.length == 3;
+            case "delete":
+                return parts.length == 2;
+            case "ping":
+                return parts.length == 1;
+            default:
+                return false;
         }
     }
 
